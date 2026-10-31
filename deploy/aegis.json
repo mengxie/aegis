@@ -1,0 +1,42 @@
+{
+  "listen": ":8080",
+  "requestTimeout": "120s",
+  "upstreams": {
+    "mock": { "type": "openai", "baseURL": "http://mock:9090/v1" }
+  },
+  "models": {
+    "gpt-4o": {
+      "routes": [{ "upstream": "mock", "model": "gpt-4o" }],
+      "inputPerMTok": 2.5,
+      "outputPerMTok": 10
+    },
+    "gpt-4o-mini": {
+      "routes": [{ "upstream": "mock", "model": "gpt-4o-mini" }],
+      "inputPerMTok": 0.15,
+      "outputPerMTok": 0.6
+    }
+  },
+  "teams": {
+    "support": {
+      "keys": ["sha256:e24ecf00adfcf9c767dcff5c438d2a62607b81f2b7d778419dcaaff4c19b6530"],
+      "policy": {
+        "models": ["gpt-4o", "gpt-4o-mini"],
+        "pii": "pseudonymize",
+        "maxTokens": 2048,
+        "blockedTerms": ["Project Orca"],
+        "requestsPerMinute": 120,
+        "monthlyBudgetUSD": 500,
+        "cacheSeconds": 300
+      }
+    },
+    "analytics": {
+      "keys": ["sha256:683f8f8bc682809fcf3d541cd870bdc98df9a495918a42d680432d69ab5c7e25"],
+      "policy": {
+        "models": ["gpt-4o-mini"],
+        "pii": "block",
+        "requestsPerMinute": 30,
+        "monthlyBudgetUSD": 50
+      }
+    }
+  }
+}

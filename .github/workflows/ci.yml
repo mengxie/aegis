@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aegis_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AEGIS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/aegis_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - name: Tests (race detector, coverage, PostgreSQL)
+        run: |
+          go test -race -count=1 -coverpkg=./internal/... -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+      - name: Fuzz the stream restorer
+        run: go test ./internal/pii -run '^$' -fuzz FuzzStreamRestorer -fuzztime 30s
+      - name: Known vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: stable
+          check-latest: true
+
+  container:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start the stack
+        run: docker compose -f deploy/docker-compose.yml up --build --wait
+      - name: Personal data is protected end to end
+        run: |
+          reply=$(curl -sf http://localhost:8080/v1/chat/completions \
+            -H "Authorization: Bearer aeg_demo_support" -H "Content-Type: application/json" \
+            -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Email aroha@acme.co.nz"}]}')
+          echo "$reply"
+          echo "$reply" | grep -q 'Echo: Email aroha@acme.co.nz'
+          docker compose -f deploy/docker-compose.yml logs mock | grep -q '\[EMAIL_1\]'
+          ! docker compose -f deploy/docker-compose.yml logs mock | grep -q 'aroha@acme'
+      - name: Secrets are blocked
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat/completions \
+            -H "Authorization: Bearer aeg_demo_support" -H "Content-Type: application/json" \
+            -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"AKIAIOSFODNN7EXAMPLE"}]}')
+          test "$status" = 403
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs
+      - name: Stop
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v

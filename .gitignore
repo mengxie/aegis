@@ -1,0 +1,4 @@
+/aegis
+coverage.out
+.env
+*.local.json

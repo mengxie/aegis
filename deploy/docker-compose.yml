@@ -1,0 +1,45 @@
+# Local stack: PostgreSQL, a mock LLM provider (no API keys needed) and the gateway.
+#   docker compose -f deploy/docker-compose.yml up --build --wait
+name: aegis
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      POSTGRES_DB: aegis
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis"]
+      interval: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Stands in for OpenAI. Its log shows exactly what each prompt looked like when it left the company.
+  mock:
+    build: { context: .., dockerfile: Dockerfile }
+    command: ["mock-upstream", "-listen", ":9090"]
+
+  aegis:
+    build: { context: .., dockerfile: Dockerfile }
+    command: ["serve", "-config", "/etc/aegis/aegis.json"]
+    environment:
+      AEGIS_DATABASE_URL: postgres://aegis:aegis@postgres:5432/aegis?sslmode=disable
+    volumes:
+      - ./aegis.json:/etc/aegis/aegis.json:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      mock: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "/aegis", "healthcheck"]
+      interval: 3s
+      retries: 20
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  pgdata:

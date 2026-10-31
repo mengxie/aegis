@@ -1,0 +1,67 @@
+{
+  "listen": ":8080",
+  "requestTimeout": "120s",
+  "upstreams": {
+    "openai": { "type": "openai", "baseURL": "https://api.openai.com/v1", "apiKey": "${OPENAI_API_KEY}" },
+    "azure-nz": {
+      "type": "azure-openai",
+      "baseURL": "https://acme-australiaeast.openai.azure.com/openai/deployments",
+      "apiKey": "${AZURE_OPENAI_API_KEY}",
+      "apiVersion": "2024-10-21"
+    },
+    "on-prem": { "type": "openai", "baseURL": "http://vllm.ai.svc.cluster.local:8000/v1" }
+  },
+  "models": {
+    "gpt-4o": {
+      "routes": [
+        { "upstream": "azure-nz", "model": "gpt-4o-prod" },
+        { "upstream": "openai", "model": "gpt-4o" }
+      ],
+      "inputPerMTok": 2.5,
+      "outputPerMTok": 10
+    },
+    "gpt-4o-mini": {
+      "routes": [
+        { "upstream": "azure-nz", "model": "gpt-4o-mini-prod" },
+        { "upstream": "openai", "model": "gpt-4o-mini" }
+      ],
+      "inputPerMTok": 0.15,
+      "outputPerMTok": 0.6
+    },
+    "llama-internal": {
+      "routes": [{ "upstream": "on-prem", "model": "meta-llama/Llama-3.3-70B-Instruct" }],
+      "inputPerMTok": 0,
+      "outputPerMTok": 0
+    }
+  },
+  "teams": {
+    "customer-support": {
+      "keys": ["sha256:REPLACE_WITH_OUTPUT_OF_aegis_new-key"],
+      "policy": {
+        "models": ["gpt-4o-mini", "gpt-4o"],
+        "pii": "pseudonymize",
+        "maxTokens": 2048,
+        "requestsPerMinute": 600,
+        "monthlyBudgetUSD": 2000,
+        "cacheSeconds": 600
+      }
+    },
+    "data-science": {
+      "keys": ["sha256:REPLACE_WITH_OUTPUT_OF_aegis_new-key"],
+      "policy": {
+        "pii": "block",
+        "blockedTerms": ["Project Orca"],
+        "requestsPerMinute": 120,
+        "monthlyBudgetUSD": 500
+      }
+    },
+    "legal": {
+      "keys": ["sha256:REPLACE_WITH_OUTPUT_OF_aegis_new-key"],
+      "policy": {
+        "models": ["llama-internal"],
+        "pii": "allow",
+        "requestsPerMinute": 60
+      }
+    }
+  }
+}

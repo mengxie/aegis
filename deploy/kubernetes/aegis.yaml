@@ -1,0 +1,86 @@
+# Production-shaped Kubernetes deployment. Create the config and secrets first:
+#   kubectl create configmap aegis-config --from-file=aegis.json=./aegis.json
+#   kubectl create secret generic aegis-secrets \
+#     --from-literal=AEGIS_DATABASE_URL=postgres://... --from-literal=OPENAI_API_KEY=sk-... \
+#     --from-literal=AZURE_OPENAI_API_KEY=...
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis
+  labels: { app.kubernetes.io/name: aegis }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app.kubernetes.io/name: aegis }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: aegis }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      terminationGracePeriodSeconds: 45 # streams get 30 s to finish after SIGTERM
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app.kubernetes.io/name: aegis }
+      containers:
+        - name: aegis
+          image: ghcr.io/mengxie/aegis:latest
+          args: ["serve", "-config", "/etc/aegis/aegis.json"]
+          ports: [{ name: http, containerPort: 8080 }]
+          envFrom: [{ secretRef: { name: aegis-secrets } }]
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/aegis, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: aegis-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegis
+spec:
+  selector: { app.kubernetes.io/name: aegis }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aegis
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: aegis }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aegis
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: aegis }
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
